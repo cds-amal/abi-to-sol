@@ -78,6 +78,11 @@ interface Context {
   parameterModifiers?: (parameter: Abi.Parameter) => string[];
 }
 
+interface Identifier {
+  identifier: string;
+  container?: string;
+}
+
 type Visit<N extends Node> = VisitOptions<N, Context | undefined>;
 
 type ConstructorOptions = {
@@ -98,10 +103,7 @@ class SolidityGenerator implements Visitor<string, Context | undefined> {
   private abiFeatures: AbiFeatures;
   private declarations: Declarations;
   private identifiers: {
-    [signature: string]: {
-      identifier: string;
-      container?: string;
-    }
+    [signature: string]: Identifier;
   };
 
   constructor({
@@ -391,15 +393,24 @@ class SolidityGenerator implements Visitor<string, Context | undefined> {
     variable: Abi.Parameter | Component,
     context: Pick<Context, "interfaceName"> = {}
   ): string {
-    const signature = this.generateSignature(variable);
-
-    if (!signature) {
-      return variable.type;
-    }
-
     const { type } = variable;
 
-    const { container, identifier } = this.identifiers[signature];
+    const signature = this.generateSignature(variable);
+
+    if (signature) {
+      const { container, identifier } = this.identifiers[signature];
+
+      return this.generateStructType({ type, container, identifier}, context);
+    }
+
+    return type;
+  }
+
+  private generateStructType(
+    variable: Identifier & Pick<Abi.Parameter, "type">,
+    context: Pick<Context, "interfaceName"> = {}
+  ): string {
+    const { type, container, identifier } = variable;
 
     if (container && container !== context.interfaceName) {
       return type.replace("tuple", `${container}.${identifier}`);
