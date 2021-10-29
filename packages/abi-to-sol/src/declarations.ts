@@ -4,17 +4,6 @@ import * as Abi from "@truffle/abi-utils";
 
 import {Visitor, VisitOptions, dispatch, Node} from "./visitor";
 
-export interface Component {
-  name: string;
-  type: string;
-  signature?: string;
-}
-
-export interface Declaration {
-  identifier?: string;
-  components: Component[];
-}
-
 export interface Declarations {
   signatureDeclarations: {
     [signature: string]: Declaration;
@@ -24,54 +13,89 @@ export interface Declarations {
   }
 }
 
-export class DeclarationsCollector implements Visitor<Declarations> {
-  visitAbi({node: nodes}: VisitOptions<Abi.Abi>): Declarations {
+export interface Declaration {
+  identifier?: string;
+  components: Component[];
+}
+
+export interface Component {
+  name: string;
+  type: string;
+  signature?: string;
+}
+
+export const collectDeclarations = (node: SchemaAbi | Node): Declarations =>
+  dispatch({
+    node,
+    visitor: new DeclarationsCollector(),
+  });
+
+interface Context {
+}
+
+type Visit<N extends Node> = VisitOptions<N, Context | undefined>;
+
+class DeclarationsCollector implements Visitor<Declarations, Context | undefined> {
+  visitAbi({
+    node: nodes,
+    context
+  }: Visit<Abi.Abi>): Declarations {
     return nodes
-      .map((node) => dispatch({node, visitor: this}))
+      .map((node) => dispatch({node, context, visitor: this}))
       .reduce(mergeDeclarations, emptyDeclarations());
   }
 
-  visitEventEntry({node: entry}: VisitOptions<Abi.EventEntry>): Declarations {
+  visitEventEntry({
+    node: entry,
+    context
+  }: Visit<Abi.EventEntry>): Declarations {
     return entry.inputs
-      .map((node) => dispatch({node, visitor: this}))
+      .map((node) => dispatch({node, context, visitor: this}))
       .reduce(mergeDeclarations, emptyDeclarations());
   }
 
-  visitErrorEntry({node: entry}: VisitOptions<Abi.ErrorEntry>): Declarations {
+  visitErrorEntry({
+    node: entry,
+    context
+  }: Visit<Abi.ErrorEntry>): Declarations {
     return entry.inputs
-      .map((node) => dispatch({node, visitor: this}))
+      .map((node) => dispatch({node, context, visitor: this}))
       .reduce(mergeDeclarations, emptyDeclarations());
   }
 
   visitFunctionEntry({
     node: entry,
-  }: VisitOptions<Abi.FunctionEntry>): Declarations {
+    context
+  }: Visit<Abi.FunctionEntry>): Declarations {
     return [...entry.inputs, ...(entry.outputs || [])]
-      .map((node) => dispatch({node, visitor: this}))
+      .map((node) => dispatch({node, context, visitor: this}))
       .reduce(mergeDeclarations, emptyDeclarations());
   }
 
   visitConstructorEntry({
     node: entry,
-  }: VisitOptions<Abi.ConstructorEntry>): Declarations {
+    context
+  }: Visit<Abi.ConstructorEntry>): Declarations {
     return entry.inputs
-      .map((node) => dispatch({node, visitor: this}))
+      .map((node) => dispatch({node, context, visitor: this}))
       .reduce(mergeDeclarations, emptyDeclarations());
   }
 
   visitFallbackEntry({
-    node: entry,
-  }: VisitOptions<Abi.FallbackEntry>): Declarations {
+    node: entry
+  }: Visit<Abi.FallbackEntry>): Declarations {
     return emptyDeclarations();
   }
 
   visitReceiveEntry({
     node: entry,
-  }: VisitOptions<Abi.ReceiveEntry>): Declarations {
+  }: Visit<Abi.ReceiveEntry>): Declarations {
     return emptyDeclarations();
   }
 
-  visitParameter({node: parameter}: VisitOptions<Abi.Parameter>): Declarations {
+  visitParameter({
+    node: parameter
+  }: Visit<Abi.Parameter>): Declarations {
     if (!parameter.type.startsWith("tuple")) {
       return emptyDeclarations();
     }
@@ -124,12 +148,6 @@ export class DeclarationsCollector implements Visitor<Declarations> {
     return mergeDeclarations(declarations, componentDeclarations);
   }
 }
-
-export const collectDeclarations = (node: SchemaAbi | Node) =>
-  dispatch({
-    node,
-    visitor: new DeclarationsCollector(),
-  });
 
 function mergeDeclarations(
   a: Declarations,
