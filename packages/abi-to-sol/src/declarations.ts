@@ -14,8 +14,13 @@ export interface Declarations {
 }
 
 export interface Declaration {
-  identifier?: string;
+  identifier: Identifier;
   components: Component[];
+}
+
+export interface Identifier {
+  name: string;
+  container?: string;
 }
 
 export interface Component {
@@ -36,6 +41,8 @@ interface Context {
 type Visit<N extends Node> = VisitOptions<N, Context | undefined>;
 
 class DeclarationsCollector implements Visitor<Declarations, Context | undefined> {
+  private nextNameAssignmentIndex: number = 0;
+
   visitAbi({
     node: nodes,
     context
@@ -100,10 +107,11 @@ class DeclarationsCollector implements Visitor<Declarations, Context | undefined
       return emptyDeclarations();
     }
 
-    let container = "";
+    const identifier = this.generateIdentifier(parameter);
     const components = parameter.components || [];
     const signature = Codec.AbiData.Utils.abiTupleSignature(components);
     const declaration: Declaration = {
+      identifier,
       components: components.map(({name, type, components}) =>
         !components
           ? {name, type}
@@ -115,26 +123,12 @@ class DeclarationsCollector implements Visitor<Declarations, Context | undefined
       ),
     };
 
-    if ("internalType" in parameter && parameter.internalType) {
-      const match = parameter.internalType.match(/struct ([^\[]+).*/);
-      if (match) {
-        const possiblyQualifiedIdentifier = match[1];
-        const parts = possiblyQualifiedIdentifier.split(".");
-        if (parts.length === 1) {
-          declaration.identifier = parts[0];
-        } else if (parts.length === 2) {
-          container = parts[0];
-          declaration.identifier = parts[1];
-        }
-      }
-    }
-
     const declarations = {
       signatureDeclarations: {
         [signature]: declaration
       },
       containerSignatures: {
-        [container]: [signature]
+        [identifier.container || ""]: [signature]
       }
     };
 
@@ -146,6 +140,35 @@ class DeclarationsCollector implements Visitor<Declarations, Context | undefined
 
 
     return mergeDeclarations(declarations, componentDeclarations);
+  }
+
+  private generateIdentifier(parameter: Abi.Parameter): Identifier {
+    const { internalType = "" } = parameter;
+    const match = internalType.match(/struct ([^\[]+).*/);
+    if (!match) {
+      return {
+        name: this.nextAssignedName()
+      };
+    }
+
+    const possiblyQualifiedIdentifier = match[1];
+    const parts = possiblyQualifiedIdentifier.split(".");
+    if (parts.length === 1) {
+      const [name] = parts;
+      return { name };
+    } else if (parts.length === 2) {
+      const [container, name] = parts;
+      return { name, container };
+    }
+
+    // this shouldn't really happen
+    return {
+      name: this.nextAssignedName()
+    };
+  }
+
+  private nextAssignedName(): string {
+    return `S_${this.nextNameAssignmentIndex++}`;
   }
 }
 

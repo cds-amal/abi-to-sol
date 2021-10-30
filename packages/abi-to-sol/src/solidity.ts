@@ -11,6 +11,7 @@ import {
   Component,
   Declaration,
   Declarations,
+  Identifier,
   collectDeclarations,
 } from "./declarations";
 import { collectAbiFeatures, AbiFeatures } from "./abi-features";
@@ -78,11 +79,6 @@ interface Context {
   parameterModifiers?: (parameter: Abi.Parameter) => string[];
 }
 
-interface Identifier {
-  identifier: string;
-  container?: string;
-}
-
 type Visit<N extends Node> = VisitOptions<N, Context | undefined>;
 
 type ConstructorOptions = {
@@ -102,9 +98,6 @@ class SolidityGenerator implements Visitor<string, Context | undefined> {
   private versionFeatures: VersionFeatures;
   private abiFeatures: AbiFeatures;
   private declarations: Declarations;
-  private identifiers: {
-    [signature: string]: Identifier;
-  };
 
   constructor({
     name,
@@ -120,30 +113,6 @@ class SolidityGenerator implements Visitor<string, Context | undefined> {
     this.versionFeatures = versionFeatures;
     this.abiFeatures = abiFeatures;
     this.declarations = declarations;
-
-    this.identifiers = {};
-    let index = 0;
-    for (const [container, signatures] of Object.entries(declarations.containerSignatures)) {
-      for (const signature of signatures) {
-        const {
-          identifier = `S_${index++}`
-        } = declarations.signatureDeclarations[signature];
-
-        if (container === "" && this.versionFeatures["global-structs"] !== true) {
-          this.identifiers[signature] = {
-            container: shimGlobalInterfaceName,
-            identifier
-          };
-        } else if (container === "") {
-          this.identifiers[signature] = { identifier };
-        } else {
-          this.identifiers[signature] = {
-            container,
-            identifier
-          }
-        }
-      }
-    }
   }
 
   visitAbi({node: abi}: Visit<Abi.Abi>) {
@@ -368,10 +337,10 @@ class SolidityGenerator implements Visitor<string, Context | undefined> {
     return Object.entries(this.declarations.signatureDeclarations)
       .filter(([signature]) => signatures.has(signature))
       .map(([signature, declaration]) => {
-        const { identifier } = this.identifiers[signature];
+        const { identifier: { name } } = declaration;
         const components = this.generateComponents(declaration, { interfaceName: container });
 
-        return `struct ${identifier} { ${components} }`;
+        return `struct ${name} { ${components} }`;
       })
       .join("\n\n");
   }
@@ -397,30 +366,32 @@ class SolidityGenerator implements Visitor<string, Context | undefined> {
 
     const signature = this.generateSignature(variable);
 
-    if (signature) {
-      const { container, identifier } = this.identifiers[signature];
-
-      return this.generateStructType({ type, container, identifier}, context);
+    if (!signature) {
+      return type;
     }
 
-    return type;
+    const declaration = this.declarations.signatureDeclarations[signature];
+
+    const { identifier: { container, name } } = declaration;
+
+    return this.generateStructType({ type, container, name }, context);
   }
 
   private generateStructType(
     variable: Identifier & Pick<Abi.Parameter, "type">,
     context: Pick<Context, "interfaceName"> = {}
   ): string {
-    const { type, container, identifier } = variable;
+    const { type, name, container } = variable;
 
     if (container && container !== context.interfaceName) {
-      return type.replace("tuple", `${container}.${identifier}`);
+      return type.replace("tuple", `${container}.${name}`);
     }
 
     if (!container && this.versionFeatures["global-structs"] !== true) {
-      return type.replace("tuple", `${shimGlobalInterfaceName}.${identifier}`);
+      return type.replace("tuple", `${shimGlobalInterfaceName}.${name}`);
     }
 
-    return type.replace("tuple", identifier);
+    return type.replace("tuple", name);
   }
 
   private generateSignature(
