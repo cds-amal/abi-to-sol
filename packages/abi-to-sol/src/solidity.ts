@@ -1,5 +1,4 @@
 import type Prettier from "prettier";
-import * as Codec from "@truffle/codec";
 import * as Abi from "@truffle/abi-utils";
 import {Abi as SchemaAbi} from "@truffle/contract-schema/spec";
 
@@ -10,8 +9,8 @@ import * as defaults from "./defaults";
 import {
   Component,
   Declaration,
-  Declarations,
-  Identifier,
+  CollectedDeclarations,
+  Type,
   collectDeclarations,
 } from "./declarations";
 import { collectAbiFeatures, AbiFeatures } from "./abi-features";
@@ -84,7 +83,7 @@ type Visit<N extends Node> = VisitOptions<N, Context | undefined>;
 type ConstructorOptions = {
   versionFeatures: VersionFeatures;
   abiFeatures: AbiFeatures;
-  declarations: Declarations;
+  declarations: CollectedDeclarations;
 } & Required<
   Omit<GenerateSolidityOptions, "abi" | "prettifyOutput">
 >;
@@ -97,7 +96,7 @@ class SolidityGenerator implements Visitor<string, Context | undefined> {
   private solidityVersion: string;
   private versionFeatures: VersionFeatures;
   private abiFeatures: AbiFeatures;
-  private declarations: Declarations;
+  private declarations: CollectedDeclarations;
 
   constructor({
     name,
@@ -253,12 +252,15 @@ class SolidityGenerator implements Visitor<string, Context | undefined> {
   }
 
   visitParameter({node: parameter, context}: Visit<Abi.Parameter>) {
-    const type = this.generateType(parameter, context);
+    const type = this.declarations.typeForParameter(parameter);
 
-    // @ts-ignore
-    const {parameterModifiers} = context;
+    const { parameterModifiers = () => [] } = context || {};
 
-    return [type, ...parameterModifiers(parameter), parameter.name].join(" ");
+    return [
+      this.generateType(type, context),
+      ...parameterModifiers(parameter),
+      parameter.name
+    ].join(" ");
   }
 
   private generateHeader(): string {
@@ -291,15 +293,15 @@ class SolidityGenerator implements Visitor<string, Context | undefined> {
   private generateDeclarations(): string {
     if (
       this.versionFeatures["structs-in-interfaces"] !== true &&
-      Object.keys(this.declarations.signatureDeclarations).length > 0
+      !this.declarations.isEmpty()
     ) {
       throw new Error(
         "abi-to-sol does not support custom struct types for this Solidity version"
       );
     }
 
-    const externalContainers = Object.keys(this.declarations.containerSignatures)
-      .filter(container => container !== "" && container !== this.name);
+    const externalContainers = [...this.declarations.structContainerNames()]
+      .filter(container => container !== this.name);
 
     const externalDeclarations = externalContainers
       .map(container => [
@@ -309,13 +311,13 @@ class SolidityGenerator implements Visitor<string, Context | undefined> {
       ].join("\n"))
       .join("\n\n");
 
-    const globalSignatures = this.declarations.containerSignatures[""] || [];
-    if (globalSignatures.length > 0) {
+    const globalDeclarations = this.declarations.globalDeclarations();
+    if (globalDeclarations.size > 0) {
       const declarations = this.versionFeatures["global-structs"] === true
-        ? this.generateDeclarationsForContainer("")
+        ? this.generateGlobalDeclarations()
         : [
             `interface ${shimGlobalInterfaceName} {`,
-            this.generateDeclarationsForContainer(""),
+            this.generateGlobalDeclarations(),
             `}`
           ].join("\n");
 
@@ -325,18 +327,28 @@ class SolidityGenerator implements Visitor<string, Context | undefined> {
     return externalDeclarations;
   }
 
+  private generateGlobalDeclarations(): string {
+    const declarations = this.declarations.globalDeclarations();
+
+    const container = this.versionFeatures["global-structs"] === true
+      ? ""
+      : shimGlobalInterfaceName;
+
+    return [...declarations]
+      .map((declaration) => {
+        const { identifier: { name } } = declaration;
+        const components = this.generateComponents(declaration, { interfaceName: container });
+
+        return `struct ${name} { ${components} }`;
+      })
+      .join("\n\n");
+  }
+
   private generateDeclarationsForContainer(container: string): string {
-    const signatures = new Set(
-      this.declarations.containerSignatures[container]
-    );
+    const declarations = this.declarations.containerDeclarations(container);
 
-    if (container === "" && this.versionFeatures["global-structs"] !== true) {
-      container = shimGlobalInterfaceName;
-    }
-
-    return Object.entries(this.declarations.signatureDeclarations)
-      .filter(([signature]) => signatures.has(signature))
-      .map(([signature, declaration]) => {
+    return [...declarations]
+      .map((declaration) => {
         const { identifier: { name } } = declaration;
         const components = this.generateComponents(declaration, { interfaceName: container });
 
@@ -351,58 +363,44 @@ class SolidityGenerator implements Visitor<string, Context | undefined> {
   ): string {
     return declaration.components
       .map((component) => {
-        const {name} = component;
+        const { name, type } = component;
 
-        return `${this.generateType(component, context)} ${name};`;
+        return `${this.generateType(type, context)} ${name};`;
       })
       .join("\n");
   }
 
   private generateType(
-    variable: Abi.Parameter | Component,
+    type: Type,
     context: Pick<Context, "interfaceName"> = {}
   ): string {
-    const { type } = variable;
+    switch (type.kind) {
+      case "struct": {
+        const {
+          parameterType,
+          identifier: { container, name }
+        } = type;
 
-    const signature = this.generateSignature(variable);
+        if (!container && this.versionFeatures["global-structs"] !== true) {
+          return parameterType
+            .replace("tuple", `${shimGlobalInterfaceName}.${name}`);
+        }
 
-    if (!signature) {
-      return type;
-    }
+        if (!container) {
+          return parameterType.replace("tuple", name);
+        }
 
-    const declaration = this.declarations.signatureDeclarations[signature];
+        if (container === context.interfaceName) {
+          return parameterType.replace("tuple", name);
+        }
 
-    const { identifier: { container, name } } = declaration;
-
-    return this.generateStructType({ type, container, name }, context);
-  }
-
-  private generateStructType(
-    variable: Identifier & Pick<Abi.Parameter, "type">,
-    context: Pick<Context, "interfaceName"> = {}
-  ): string {
-    const { type, name, container } = variable;
-
-    if (container && container !== context.interfaceName) {
-      return type.replace("tuple", `${container}.${name}`);
-    }
-
-    if (!container && this.versionFeatures["global-structs"] !== true) {
-      return type.replace("tuple", `${shimGlobalInterfaceName}.${name}`);
-    }
-
-    return type.replace("tuple", name);
-  }
-
-  private generateSignature(
-    variable: Abi.Parameter | Component
-  ): string | undefined {
-    if ("signature" in variable && variable.signature) {
-      return variable.signature;
-    }
-
-    if ("components" in variable && variable.components) {
-      return Codec.AbiData.Utils.abiTupleSignature(variable.components);
+        return parameterType.replace("tuple", `${container}.${name}`);
+      }
+      case "elementary":
+      default: {
+        const { parameterType } = type;
+        return parameterType;
+      }
     }
   }
 

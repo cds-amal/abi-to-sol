@@ -14,10 +14,9 @@ describe("collectDeclarations", () => {
         (parameter) => {
           fc.pre(!parameter.type.startsWith("tuple"));
 
-          expect(collectDeclarations(parameter)).toEqual({
-            signatureDeclarations: {},
-            containerSignatures: {}
-          });
+          const declarations = collectDeclarations(parameter);
+
+          expect(declarations.isEmpty()).toEqual(true);
         }
       );
     });
@@ -35,9 +34,9 @@ describe("collectDeclarations", () => {
           );
 
           const declarations = collectDeclarations(parameter);
-          expect(Object.keys(declarations.signatureDeclarations)).toHaveLength(1);
+          expect([...declarations.allDeclarations()]).toHaveLength(1);
 
-          const [declaration] = Object.values(declarations.signatureDeclarations);
+          const [declaration] = [...declarations.allDeclarations()];
           expect(declaration).toHaveProperty("components");
 
           const {components} = declaration;
@@ -73,7 +72,7 @@ describe("collectDeclarations", () => {
           );
 
           const declarations = collectDeclarations(parameter);
-          expect(Object.keys(declarations.signatureDeclarations)).toHaveLength(2);
+          expect([...declarations.allDeclarations()]).toHaveLength(2);
         }
       );
     });
@@ -88,59 +87,85 @@ describe("collectDeclarations", () => {
 
         const declarations = collectDeclarations(parameter);
 
-        for (const {components} of Object.values(declarations.signatureDeclarations)) {
-          for (const {signature} of components) {
-            if (signature) {
-              expect(declarations.signatureDeclarations).toHaveProperty(signature);
+        for (const {components} of declarations.allDeclarations()) {
+          for (const component of components) {
+            const { type } = component;
+
+            if (type.kind === "struct") {
+              const { identifier } = type;
+              console.debug("identifier %o", identifier);
+              console.debug("all declarations %o", declarations.allDeclarations());
+
+              const declaration = declarations.identifierDeclaration(
+                identifier
+              );
+              expect(declaration).not.toBeUndefined();
             }
           }
         }
-      }
+      },
+      { seed: 858696588, path: "42:0:0:0:0:0", endOnFailure: true }
     );
   });
 
   describe("custom example", () => {
     const declarations = collectDeclarations(Example.abi);
 
-    for (const [structName, signature] of Object.entries(
-      Example.expectedSignatures
+    for (const [structName, declaration] of Object.entries(
+      Example.expectedDeclarations
     )) {
       describe(`struct ${structName}`, () => {
         it("exists in declarations", () => {
-          expect(declarations.signatureDeclarations).toHaveProperty(signature);
+          expect(
+            declarations.identifierDeclaration({
+              name: structName
+            })
+          ).not.toBeUndefined();
         });
 
-        const expectedComponents = (Example.expectedDeclarations as any)[
-          structName
-        ];
-        const declaration = declarations.signatureDeclarations[signature];
+        const {
+          components: expectedComponents
+        } = Example.expectedDeclarations[structName];
 
-        for (const [componentName, component] of Object.entries(
-          expectedComponents
-        )) {
+        const declaration = declarations.identifierDeclaration({
+          name: structName
+        });
+
+        // we cover this in the it() block above, so just return here to
+        // satisfy the type-checker.
+        if (!declaration) {
+          return;
+        }
+
+        for (const expectedComponent of expectedComponents) {
+          const { name: componentName } = expectedComponent;
+
           describe(`component ${componentName}`, () => {
             it("exists in declarations", () => {
               const names = declaration.components.map(({name}) => name);
               expect(names).toContain(componentName);
             });
 
-            const expectedComponent = (expectedComponents as any)[
-              componentName
-            ];
-
-            const component: any = declaration.components.find(
+            const component = declaration.components.find(
               ({name}) => name === componentName
             );
 
+            // we cover this in the it() block above, so just return here
+            // to satisfy the type-checker.
+            if (!component) {
+              return;
+            }
+
+            const { type } = component;
+            const { type: expectedType } = expectedComponent;
+
             it("has correct type", () => {
-              expect(component.type).toEqual(expectedComponent.type);
+              expect(type).toEqual(expectedType);
             });
 
-            if (component.signature) {
-              it("has correct signature", () => {
-                expect(component.signature).toEqual(
-                  expectedComponent.signature
-                );
+            if (type.kind === "struct" && expectedType.kind === "struct") {
+              it("has correct identifier", () => {
+                expect(type.identifier).toEqual(expectedType.identifier);
               });
             }
           });

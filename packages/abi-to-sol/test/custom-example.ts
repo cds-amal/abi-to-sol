@@ -1,5 +1,9 @@
 import {Abi as SchemaAbi} from "@truffle/contract-schema/spec";
 
+import type {
+  Declaration,
+} from "../src/declarations";
+
 /**
  * Solidity used to generate this ABI:
  *
@@ -100,22 +104,46 @@ export const expectedSignatures: {[name: string]: string} = {
   Bar: "(uint256,uint256)",
 };
 
-export const expectedDeclarations = {
+export const expectedDeclarations: {
+  [name: string]: Declaration
+} = {
   Foo: {
-    bars: {
-      type: "tuple[]",
-      signature: expectedSignatures.Bar,
+    identifier: {
+      name: "Foo"
     },
-    c: {
-      type: "uint256",
-    },
+    components: [{
+      name: "bars",
+      type: {
+        kind: "struct",
+        parameterType: "tuple[]",
+        identifier: {
+          name: "Foo"
+        }
+      }
+    }, {
+      name: "c",
+      type: {
+        kind: "elementary",
+        parameterType: "uint256"
+      }
+    }]
   },
   Bar: {
-    a: {
-      type: "uint256",
+    identifier: {
+      name: "Bar"
     },
-    b: {
-      type: "uint256",
-    },
+    components: [{
+      name: "a",
+      type: {
+        kind: "elementary",
+        parameterType: "uint256"
+      }
+    }, {
+      name: "b",
+      type: {
+        kind: "elementary",
+        parameterType: "uint256"
+      }
+    }]
   },
 };
